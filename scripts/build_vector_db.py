@@ -36,9 +36,6 @@ client = chromadb.PersistentClient(path=str(DB_PATH))
 # - For Higher Quality (at the cost of speed): 'all-mpnet-base-v2'
 #   This is a larger, more powerful model that often yields more accurate results.
 #   Use this if embedding quality is more critical than processing speed.
-# - A Middle Ground: 'all-MiniLM-L12-v2'
-#   This model has 12 layers instead of 6 (like the default). It offers better
-#   accuracy than L6 while still being faster than larger models like mpnet.
 # - For Multilingual Documents: 'paraphrase-multilingual-MiniLM-L12-v2'
 #   If your documents contain multiple languages, this model is specifically trained
 #   to handle them effectively.
