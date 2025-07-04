@@ -85,4 +85,3 @@ def extract_text_from_document(file_bytes: bytes, filename: str) -> str:
     # --- Final Output ---
     # Join all the extracted text blocks into a single string.
     return "\n".join(text_blocks)
-
