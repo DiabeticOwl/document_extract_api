@@ -1,107 +1,188 @@
 import chromadb
+import concurrent.futures
+import multiprocessing
+import numpy as np
+import time
+
+from core.ocr import extract_text_from_document
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
-from core.ocr import extract_text_from_document
+from tqdm import tqdm
 
 DB_PATH = Path("data/chroma_db")
 # This is the directory where your sample documents are organized into
 # subfolders by type.
 SAMPLE_DOCS_PATH = Path("data")
 COLLECTION_NAME = "document_types"
+MODEL_NAME = 'all-MiniLM-L12-v2'
 
-print("Initializing database client and embedding model...")
+# MAX_WORKERS limits the number of parallel processes for both OCR and encoding.
+# A lower number reduces memory (VRAM) and CPU load but is slower.
+# A higher number is faster but requires more resources.
+MAX_WORKERS = 2
 
-# Initialize the ChromaDB client.
-# `PersistentClient` ensures that the database is saved to disk at the
-# specified path.
-# This means the indexed data will persist even after the script finishes
-# running.
-client = chromadb.PersistentClient(path=str(DB_PATH))
 
-# We are using the 'all-MiniLM-L12-v2' model from the SentenceTransformers
-# library.
-# This model is chosen for several key reasons:
-# 1.  **Performance:** It is highly optimized to be small and fast, making it
-#     ideal for local development and production use without requiring massive
-#     computational resources.
-# 2.  **Effectiveness:** Despite its size, it is very effective at creating
-#     high-quality
-#     semantic embeddings for sentences and paragraphs. This means it's great at
-#     understanding the "meaning" of text.
-# 3.  **General Purpose:** It's trained on a wide variety of text data, making
-#     it suitable for general-purpose tasks like classifying the content of
-#     diverse documents.
-#
-# --- Alternative Models ---
-# - For Higher Quality (at the cost of speed): 'all-mpnet-base-v2'
-#   This is a larger, more powerful model that often yields more accurate results.
-#   Use this if embedding quality is more critical than processing speed.
-# - For Multilingual Documents: 'paraphrase-multilingual-MiniLM-L12-v2'
-#   If your documents contain multiple languages, this model is specifically trained
-#   to handle them effectively.
-embedding_model = SentenceTransformer('all-MiniLM-L12-v2')
+def ocr_worker(doc_path: Path):
+    """
+    A worker function designed to run in a separate process.
+    It handles the entire OCR process for a single document.
+    """
+    try:
+        with open(doc_path, "rb") as f:
+            file_bytes = f.read()
 
-# Get or create a collection in ChromaDB. A collection is similar to a table in
-# a traditional database and will store our document embeddings.
-collection = client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    # Cosine similarity is the best choice for comparing text embeddings because
-    # it measures the angle between two vectors, not their magnitude. This means
-    # it determines if two pieces of text are pointing in the same "semantic direction,"
-    # regardless of their length.
-    # For example, "Total amount due" and "Final invoice total" will have very
-    # similar cosine scores even though their lengths differ.
-    metadata={"hnsw:space": "cosine"}
-)
+        text = extract_text_from_document(file_bytes, doc_path.name)
 
-# --- 2. Processing and Indexing Documents ---
+        if text.strip():
+            doc_type = doc_path.parent.name
+            return {"text": text, "metadata": {"document_type": doc_type}}
+        return None
+    except Exception as e:
+        # Log errors from the worker process
+        tqdm.write(f"  - ERROR processing {doc_path.name}: {e}")
+        return None
 
-print("Starting document processing and indexing...")
-doc_id_counter = 0
 
-for type_path in SAMPLE_DOCS_PATH.iterdir():
-    # We only process subdirectories (e.g., 'invoices', 'receipts').
-    if type_path.is_dir():
-        # The directory name itself is our document type label.
-        doc_type = type_path.name
-        print(f"\nProcessing document type: '{doc_type}'")
+def main():
+    """
+    Main function to orchestrate the building of the vector database.
 
-        for doc_path in type_path.iterdir():
-            print(f"\t- Processing file: {doc_path.name}")
+    This script operates in three distinct phases for maximum efficiency:
+    1. OCR Phase: Sequentially read all documents and extract their text.
+    2. Parallel Encoding Phase: Use all available CPU cores to convert the
+       extracted texts into vector embeddings simultaneously.
+    3. Database Insertion Phase: Add all the generated embeddings to the
+       database in a single, efficient batch operation.
+    """
+    start_time = time.time()
 
-            # Read the entire file into memory as bytes.
-            with open(doc_path, "rb") as f:
-                file_bytes = f.read()
+    # --- 1. OCR Phase: Extract Text from All Documents ---
+    # In this phase, we iterate through every document one by one to perform OCR.
+    # While the OCR for each file is sequential, it's generally fast enough,
+    # and this approach simplifies the data preparation for the next, more
+    # computationally intensive phase.
+    print(f"--- Phase 1: Starting Parallel OCR (max_workers={MAX_WORKERS}) ---")
 
-            # Use our robust, updated OCR function to extract text.
-            # This function handles both PDFs and images, returning clean,
-            # structured text.
-            text = extract_text_from_document(file_bytes, doc_path.name)
+    if not SAMPLE_DOCS_PATH.is_dir():
+        print(f"Error: The specified sample documents directory does not exist: {SAMPLE_DOCS_PATH}")
+        return
 
-            # Only proceed if the OCR process successfully extracted text.
-            if text.strip():
-                # An embedding (or vector) is a list of numbers that represents
-                # the semantic meaning of the text. The embedding_model converts
-                # the extracted text string into this numerical format. Once in
-                # this format, we can perform mathematical comparisons
-                # (like cosine similarity) to find texts with similar meanings.
-                embedding = embedding_model.encode(text).tolist()
+    texts_to_process = []
+    all_doc_paths = [
+        doc_path
+        for type_path in SAMPLE_DOCS_PATH.iterdir()
+        if type_path.is_dir() and type_path.name != DB_PATH.name
+        for doc_path in type_path.iterdir()
+    ]
 
-                # The `collection.add()` method takes the generated embedding
-                # and saves it to the persistent database along with its
-                # associated metadata and a unique ID.
-                collection.add(
-                    embeddings=[embedding],
-                    # Metadata allows us to store extra information with each
-                    # vector.
-                    # Here, we store the document's type, which is crucial for
-                    # our classification task.
-                    metadatas=[{"document_type": doc_type}],
-                    # Each item in the database needs a unique ID.
-                    ids=[f"id_{doc_id_counter}"]
-                )
-                doc_id_counter += 1
-            else:
-                print(f"\t- WARNING: No text extracted from {doc_path.name}. Skipping.")
+    if not all_doc_paths:
+        print("Error: No documents found in the sample directory. Exiting.")
+        return
 
-print(f"\nVector database build complete. Total documents indexed: {doc_id_counter}")
+    print(f"Found {len(all_doc_paths)} documents to process.")
+
+
+    texts_to_process = []
+    # Use ProcessPoolExecutor to run the ocr_worker function on all files in parallel.
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # executor.map distributes the file paths to the worker processes.
+        # tqdm wraps this to create a progress bar for the parallel operation.
+        results = list(tqdm(
+            executor.map(ocr_worker, all_doc_paths),
+            total=len(all_doc_paths),
+            desc="Phase 1: Parallel OCR"
+        ))
+
+        # Filter out any results that failed (returned None)
+        for result in results:
+            if result:
+                texts_to_process.append(result)
+
+    if not texts_to_process:
+        print("Error: No text could be extracted from any documents. Exiting.")
+        return
+
+    print(f"\nOCR Phase complete. Found text in {len(texts_to_process)} documents.")
+
+    # --- Phase 2: Parallel Encoding ---
+    # This is the most computationally intensive part of the script. We use the
+    # SentenceTransformers library's built-in tools to perform this step in parallel,
+    # dramatically reducing the total processing time.
+    print(f"\n--- Phase 2: Starting parallel embedding generation (max_workers={MAX_WORKERS}) ---")
+
+    pool = None
+    try:
+        print("Initializing SentenceTransformer model...")
+        embedding_model = SentenceTransformer(MODEL_NAME)
+
+        sentences = [item["text"] for item in texts_to_process]
+
+        print("Starting a pool of CPU worker processes for encoding...")
+        pool = embedding_model.start_multi_process_pool()
+
+        # `encode` takes the list of sentences and distributes them among the worker
+        # processes in the pool. It automatically handles batching and scheduling
+        # to maximize CPU utilization.
+        #
+        # An embedding (or vector) is a list of numbers that represents
+        # the semantic meaning of the text. The embedding_model converts
+        # the extracted text string into this numerical format.
+        print(f"Encoding {len(sentences)} documents across {MAX_WORKERS} processes...")
+        embeddings = embedding_model.encode(
+            sentences,
+            pool=pool,
+            batch_size=32,
+            show_progress_bar=True
+        )
+
+        print("Embedding generation complete.")
+
+    except Exception as e:
+        print(f"FATAL ERROR during embedding phase: {e}")
+        return
+    finally:
+        if pool:
+            print("Stopping the process pool...")
+            embedding_model.stop_multi_process_pool(pool)
+
+    # --- Phase 3: Database Insertion ---
+    # In the final phase, we connect to the database and add all the processed
+    # data in a single, highly efficient batch operation.
+    print("\n--- Phase 3: Initializing database and adding documents ---")
+    try:
+        client = chromadb.PersistentClient(path=str(DB_PATH))
+        collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        # Adding data in one large batch is significantly faster than adding each
+        # document individually, as it minimizes database transaction overhead.
+        print(f"Adding {len(texts_to_process)} embeddings to the ChromaDB collection...")
+        collection.add(
+            # Convert the numpy array to a standard list
+            embeddings=embeddings.tolist(),
+            metadatas=[item["metadata"] for item in texts_to_process],
+            ids=[f"id_{i}" for i in range(len(texts_to_process))]
+        )
+    except Exception as e:
+        print(f"FATAL ERROR during database insertion: {e}")
+        return
+
+    end_time = time.time()
+    print("\n--------------------------------------------------")
+    print(f"Vector database build complete.")
+    print(f"Total documents successfully indexed: {len(texts_to_process)}")
+    print(f"Total time taken: {end_time - start_time:.2f} seconds")
+    print("--------------------------------------------------")
+
+
+if __name__ == "__main__":
+    # This is crucial for libraries that use CUDA (like PyTorch, which powers
+    # EasyOCR and SentenceTransformers) to work correctly in parallel processes.
+    # 'spawn' creates a fresh process, avoiding CUDA initialization conflicts
+    # that occur with the default 'fork' method on Linux/macOS.
+    # This line must be inside the `if __name__ == "__main__":` block.
+    multiprocessing.set_start_method('spawn', force=True)
+
+    main()
