@@ -16,13 +16,15 @@ The **Intelligent Document Understanding API** is designed to extract structured
 └── document_extract_api/
     ├── core/
     │   ├── __init__.py
-    │   └── ocr.py
+    │   ├── ocr.py
+    │   └── vector_db.py
     ├── data/
     ├── scripts/
     │   └── build_vector_db.py
     ├── tests/
     │   ├── fixtures/
-    │   └── text_ocr.py
+    │   ├── test_ocr.py
+    │   └── test_vector_db.py
     ├── README.md
     └── requirements.txt
 ```
