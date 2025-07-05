@@ -5,22 +5,15 @@ import multiprocessing
 import numpy as np
 import time
 
-from core.ocr import (
-    extract_text_from_document,
-    SUPPORTED_PDF_FORMATS,
-    SUPPORTED_IMAGE_FORMATS
-)
+from core.ocr import extract_text_from_document, SUPPORTED_FORMATS
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 DB_PATH = Path("data/chroma_db")
-# This is the directory where your sample documents are organized into
-# subfolders by type.
 SAMPLE_DOCS_PATH = Path("data/sample_docs")
 COLLECTION_NAME = "document_types"
 MODEL_NAME = 'all-MiniLM-L6-v2'
-SUPPORTED_FORMATS = SUPPORTED_PDF_FORMATS + SUPPORTED_IMAGE_FORMATS
 
 # MAX_WORKERS limits the number of parallel processes for both OCR and encoding.
 # A lower number reduces memory (VRAM) and CPU load but is slower.

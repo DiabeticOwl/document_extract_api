@@ -5,8 +5,20 @@ from pathlib import Path
 
 reader = easyocr.Reader(['en'])
 
+# Define supported file formats by their extensions.
 SUPPORTED_PDF_FORMATS = (".pdf",)
 SUPPORTED_IMAGE_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
+SUPPORTED_FORMATS = SUPPORTED_PDF_FORMATS + SUPPORTED_IMAGE_FORMATS
+
+# Define supported file formats by their MIME types for API validation.
+# This creates a single source of truth for what the application can handle.
+SUPPORTED_MIME_TYPES = (
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/bmp",
+    "image/tiff",
+)
 
 
 def extract_text_from_document(
