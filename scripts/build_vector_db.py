@@ -58,7 +58,6 @@ def ocr_worker(doc_path: Path):
             return {"text": text, "metadata": {"document_type": doc_type}}
         return None
     except Exception as e:
-        # Log errors from the worker process
         tqdm.write(f"  - ERROR processing {doc_path.name}: {e}")
         return None
 
