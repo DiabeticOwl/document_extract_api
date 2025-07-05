@@ -17,7 +17,7 @@ from tqdm import tqdm
 DB_PATH = Path("data/chroma_db")
 # This is the directory where your sample documents are organized into
 # subfolders by type.
-SAMPLE_DOCS_PATH = Path("data")
+SAMPLE_DOCS_PATH = Path("data/sample_docs")
 COLLECTION_NAME = "document_types"
 MODEL_NAME = 'all-MiniLM-L6-v2'
 SUPPORTED_FORMATS = SUPPORTED_PDF_FORMATS + SUPPORTED_IMAGE_FORMATS
