@@ -87,6 +87,7 @@ PyMuPDF==1.26.3
 PyPika==0.48.9
 pyproject_hooks==1.2.0
 pytest==8.4.1
+pytest-mock==3.14.1
 python-bidi==0.6.6
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
