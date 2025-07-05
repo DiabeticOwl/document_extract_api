@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 from core.ocr import extract_text_from_document
 
