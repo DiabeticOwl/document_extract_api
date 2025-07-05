@@ -52,7 +52,12 @@ def test_extract_entities_api_full_success(mocker, mock_db_client_override):
     # Configure the behavior of all our mocks for this test.
     mock_db_client_override.find_document_type.return_value = {"document_type": "invoice", "confidence": 0.95}
     mocker.patch('api.endpoints.extract_text_from_document', return_value="Sample OCR text")
-    mocker.patch('api.endpoints.extract_entities_with_llm', return_value={"invoice_number": "API-TEST-123"})
+
+    mock_llm_response = {
+        "invoice_number": {"value": "API-TEST-123", "confidence": 0.99},
+        "total_amount": {"value": "$100.00", "confidence": 0.95}
+    }
+    mocker.patch('api.endpoints.extract_entities_with_llm', return_value=mock_llm_response)
 
     # Send a request to the API endpoint.
     file_path = FIXTURES_DIR / "invoice-template.pdf"
@@ -64,7 +69,8 @@ def test_extract_entities_api_full_success(mocker, mock_db_client_override):
     assert response.status_code == 200
     data = response.json()
     assert data['document_type'] == 'invoice'
-    assert data['entities']['invoice_number'] == 'API-TEST-123'
+    assert data['entities']['invoice_number']['value'] == 'API-TEST-123'
+    assert data['entities']['invoice_number']['confidence'] == 0.99
     mock_db_client_override.find_document_type.assert_called_once_with("Sample OCR text")
 
 

@@ -9,8 +9,8 @@ LLM_MODEL = "phi3:mini"
 
 PROMPT_TEMPLATE = """
 Given the following text extracted from a document of type '{document_type}', extract the following fields: {field_list}.
-Return your response as a valid JSON object where the keys are the field names and the values are the extracted information.
-If a field is not found in the text, use a null value for its key.
+Return your response as a valid JSON object.
+For each field, provide a nested JSON object with two keys: "value" which is the extracted information (or null if not found), and "confidence" which is your estimated confidence score from 0.0 to 1.0 that the value is correct based on the text.
 Provide no additional text, commentary, or explanation outside of the JSON object.
 
 Document Text:
@@ -71,12 +71,12 @@ def extract_entities_with_llm(document_text: str, document_type: str) -> dict:
         "model": LLM_MODEL,
         "prompt": prompt,
         "stream": False,
-        "format": "json" # This tells Ollama to ensure the output is valid JSON.
+        "format": "json"
     }
 
     try:
         # Make the API call to the local LLM.
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=180) # Increased timeout for LLM
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=180)
         response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
 
         # The response from Ollama with format=json is already a JSON object.
