@@ -25,7 +25,7 @@ SUPPORTED_FORMATS = SUPPORTED_PDF_FORMATS + SUPPORTED_IMAGE_FORMATS
 # MAX_WORKERS limits the number of parallel processes for both OCR and encoding.
 # A lower number reduces memory (VRAM) and CPU load but is slower.
 # A higher number is faster but requires more resources.
-MAX_WORKERS = 2
+MAX_WORKERS = 4
 
 worker_ocr_reader = None
 
@@ -36,7 +36,6 @@ def init_ocr_worker():
     This runs ONCE per worker, loading the EasyOCR model into that process's memory.
     """
     global worker_ocr_reader
-    print(f"Initializing EasyOCR reader for worker process: {multiprocessing.current_process().pid}...")
     worker_ocr_reader = easyocr.Reader(['en'])
 
 
@@ -97,8 +96,6 @@ def main():
         print("Error: No documents found in the sample directory. Exiting.")
         return
 
-    all_doc_paths = all_doc_paths[:100]
-
     print(f"Found {len(all_doc_paths)} documents to process.")
 
     texts_to_process = []
@@ -130,7 +127,7 @@ def main():
         # An embedding (or vector) is a list of numbers that represents
         # the semantic meaning of the text. The embedding_model converts
         # the extracted text string into this numerical format.
-        print("Encoding {len(sentences)} documents in a single batch...")
+        print(f"Encoding {len(sentences)} documents in a single batch...")
         embeddings = embedding_model.encode(
             sentences,
             batch_size=32,
