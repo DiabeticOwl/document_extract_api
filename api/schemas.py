@@ -15,8 +15,6 @@ class ExtractionResponse(BaseModel):
         example=0.92,
         description="The confidence score of the classification (0.0 to 1.0)."
     )
-    # The 'entities' field will be populated by the LLM in a future step.
-    # For now, it can be an empty dictionary.
     entities: Dict[str, Any] = Field(
         ...,
         example={"invoice_number": "INV-12345", "total_amount": "$450.00"},

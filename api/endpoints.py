@@ -21,7 +21,7 @@ async def extract_entities(file: UploadFile = File(..., description="The documen
     1.  Accepts a document upload.
     2.  Performs OCR to extract text.
     3.  Classifies the document type using a vector database.
-    4.  (Future) Extracts structured entities using an LLM.
+    4.  Extracts structured entities using an LLM.
     5.  Returns a standardized JSON response.
     """
     start_time = time.time()
@@ -54,10 +54,11 @@ async def extract_entities(file: UploadFile = File(..., description="The documen
     doc_type = classification_result['document_type']
     confidence = classification_result['confidence']
 
-    # 4. (Placeholder for LLM Entity Extraction)
-    # In the next step of the project, this is where you would call the LLM
-    # with the extracted text and document type to get the structured entities.
-    entities = {} # Placeholder
+    # 4. Extract structured entities using the LLM.
+    # This is the new step that calls our llm module.
+    entities = extract_entities_with_llm(extracted_text, doc_type)
+    if "error" in entities:
+        raise HTTPException(status_code=500, detail=entities["error"])
 
     processing_time = f"{time.time() - start_time:.2f}s"
 
