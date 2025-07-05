@@ -1,7 +1,16 @@
+import io
 import easyocr
 import pymupdf
 
+from core.utils import noise_reduction, adaptive_thresholding, deskew
 from pathlib import Path
+from PIL import Image
+
+# This module is the heart of the Optical Character Recognition (OCR) pipeline.
+# Its primary responsibility is to take a raw document file (image or PDF)
+# and extract all readable text from it. It is designed to be flexible,
+# supporting various file types and optional image preprocessing steps to
+# improve accuracy on low-quality documents.
 
 reader = easyocr.Reader(['en'])
 
@@ -22,86 +31,103 @@ SUPPORTED_MIME_TYPES = (
 
 
 def extract_text_from_document(
-        file_bytes: bytes,
-        filename: str,
-        reader: easyocr.Reader = None
+    file_bytes: bytes,
+    filename: str,
+    reader: easyocr.Reader = None,
+    preprocessing: str = None
 ) -> str:
     """
-    Extracts text from a given document file (PDF or image).
+    Extracts text from a document, with optional preprocessing.
 
-    This function acts as a versatile OCR processor. It determines the file type
-    based on the filename extension and applies the appropriate processing logic.
-    For PDFs, it iterates through each page, converts it to a high-quality image,
-    and then performs OCR. For images, it performs OCR directly.
-
-    This function accepts an optional, pre-initialized EasyOCR reader. If no
-    reader is provided, it will create its own for single-use cases
-    (like the API endpoint). This makes the function flexible for both
-    single-threaded and multi-threaded environments.
+    This is the main function of the module. It orchestrates the process of
+    reading a document from its byte representation, applying an optional
+    image enhancement technique, and then using the EasyOCR engine to
+    extract the text.
 
     Args:
-        file_bytes (bytes): The raw byte content of the file uploaded by the user.
-        filename (str): The original name of the file (e.g., "my_invoice.pdf").
-                        Used to determine the file type.
+        file_bytes (bytes): The raw byte content of the file.
+        filename (str): The original name of the file, used to determine its type (PDF vs. image).
         reader (easyocr.Reader, optional): A pre-initialized EasyOCR reader instance.
-                                           If None, a new one is created. Defaults to None.
+            This is a key optimization for parallel processing, allowing worker
+            processes to reuse a single loaded model instead of re-initializing
+            it for every task. If None, a new reader is created. Defaults to None.
+        preprocessing (str, optional): A string specifying which preprocessing
+            step to apply. Can be 'deskew', 'noise', 'threshold', or None.
+            Defaults to None.
 
     Returns:
         str: A single string containing all the extracted text, with different
-             text blocks separated by newline characters. Returns an empty
-             string if an error occurs or no text is found.
+             text blocks separated by newline characters.
     """
+    # If no reader is provided, create a temporary one. This is useful for
+    # single-threaded use cases, like the final API endpoint.
     if reader is None:
         reader = easyocr.Reader(['en'])
+
     doc_path = Path(filename)
     file_suffix = doc_path.suffix.lower()
-
     # A list to aggregate all recognized text blocks from the document.
     text_blocks = []
 
+    # --- PDF Processing Logic ---
     if file_suffix in SUPPORTED_PDF_FORMATS:
         try:
+            # This can fail if the PDF is password-protected, corrupted, or not a valid PDF.
             pdf_document = pymupdf.open(stream=file_bytes, filetype="pdf")
         except Exception as e:
-            # This can fail if the PDF is password-protected, corrupted,
-            # or not a valid PDF.
             print(f"Failed to open PDF '{filename}'. It may be corrupted or invalid. Error: {e}")
             return ""
 
-        # Iterate over each page in the PDF document.
-        for page_num in range(len(pdf_document)):
+        # Iterate through each page of the PDF.
+        for page_num, page in enumerate(pdf_document):
             try:
-                page = pdf_document.load_page(page_num)
-
-                # Convert the page into a pixmap (a raster image representation).
+                # This block handles errors on a per-page basis. If one page fails,
+                # we can log the error and continue to the next, making the process more resilient.
                 pix = page.get_pixmap(dpi=400)
-                img_bytes = pix.tobytes("png")
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-                result = reader.readtext(img_bytes, detail=0, paragraph=True)
+                if preprocessing == 'deskew':
+                    img = deskew(img)
+                elif preprocessing == 'noise':
+                    img = noise_reduction(img)
+                elif preprocessing == 'threshold':
+                    img = adaptive_thresholding(img)
+
+                buf = io.BytesIO()
+                img.save(buf, format='PNG')
+                img_bytes = buf.getvalue()
+
+                # This call to readtext can also fail if the image of the page is unreadable.
+                result = reader.readtext(img_bytes, detail=0)
                 text_blocks.extend(result)
             except Exception as e:
-                # This might fail if a single page is corrupted. We log the error
-                # and continue to the next pages instead of failing the whole document.
-                print(f"Could not process page {page_num} of '{filename}'. Error: {e}")
-                continue
+                print(f"Could not process page {page_num + 1} of '{filename}'. Error: {e}. Skipping to next page.")
+                continue # Continue to the next page
 
         pdf_document.close()
 
+    # --- Image Processing Logic ---
     elif file_suffix in SUPPORTED_IMAGE_FORMATS:
         try:
-            # For image files, we can pass the bytes directly.
-            result = reader.readtext(file_bytes, detail=0, paragraph=True)
+            img = Image.open(io.BytesIO(file_bytes))
+
+            if preprocessing == 'deskew':
+                img = deskew(img)
+            elif preprocessing == 'noise':
+                img = noise_reduction(img)
+            elif preprocessing == 'threshold':
+                img = adaptive_thresholding(img)
+
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            img_bytes = buf.getvalue()
+
+            result = reader.readtext(img_bytes, detail=0)
             text_blocks.extend(result)
         except Exception as e:
-            # This can fail if the image data is malformed or unsupported by
-            # the underlying library.
-            print(f"EasyOCR failed to process image '{filename}'. Error: {e}")
+            # This can fail if the image data is malformed or unsupported by the underlying library.
+            print(f"Failed to process image '{filename}'. Error: {e}")
             return ""
 
-    else:
-        print(f"Unsupported file type '{file_suffix}' for file '{filename}'.")
-        return ""
-
-    # --- Final Output ---
     # Join all the extracted text blocks into a single string.
     return "\n".join(text_blocks)

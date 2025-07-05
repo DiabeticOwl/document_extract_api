@@ -1,9 +1,10 @@
 import chromadb
-import concurrent.futures
 import easyocr
+import json
 import multiprocessing
-import numpy as np
+import random
 import time
+import sys
 
 from core.ocr import extract_text_from_document, SUPPORTED_FORMATS
 from pathlib import Path
@@ -11,6 +12,7 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 DB_PATH = Path("data/chroma_db")
+CHECKPOINT_FILE = Path("data/ocr_output.jsonl")
 SAMPLE_DOCS_PATH = Path("data/sample_docs")
 COLLECTION_NAME = "document_types"
 MODEL_NAME = 'all-MiniLM-L6-v2'
@@ -20,6 +22,9 @@ MODEL_NAME = 'all-MiniLM-L6-v2'
 # A higher number is faster but requires more resources.
 MAX_WORKERS = 4
 
+# Define the set of preprocessing options to be applied randomly.
+# 'None' is included to ensure the original, unaltered image is also processed.
+PREPROCESSING_OPTIONS = [None, 'deskew', 'noise', 'threshold']
 worker_ocr_reader = None
 
 
@@ -43,11 +48,23 @@ def ocr_worker(doc_path: Path):
         with open(doc_path, "rb") as f:
             file_bytes = f.read()
 
-        text = extract_text_from_document(file_bytes, doc_path.name, reader=worker_ocr_reader)
+        # Randomly select a preprocessing option.
+        selected_preprocessing = random.choice(PREPROCESSING_OPTIONS)
+
+        text = extract_text_from_document(
+            file_bytes,
+            doc_path.name,
+            reader=worker_ocr_reader,
+            preprocessing=selected_preprocessing
+        )
 
         if text.strip():
             doc_type = doc_path.parent.name
-            return {"text": text, "metadata": {"document_type": doc_type}}
+            return {
+                "text": text,
+                "metadata": {"document_type": doc_type},
+                "source_file": str(doc_path)
+            }
         return None
     except Exception as e:
         tqdm.write(f"  - ERROR processing {doc_path.name}: {e}")
@@ -78,27 +95,56 @@ def main():
         print(f"Error: The specified sample documents directory does not exist: {SAMPLE_DOCS_PATH}")
         return
 
-    all_doc_paths = [
+    all_doc_paths = {
         p for p in SAMPLE_DOCS_PATH.rglob('*')
         if p.is_file()
            and p.parent.name != DB_PATH.name
            and p.suffix.lower() in SUPPORTED_FORMATS
-    ]
+    }
 
     if not all_doc_paths:
         print("Error: No documents found in the sample directory. Exiting.")
         return
 
-    print(f"Found {len(all_doc_paths)} documents to process.")
 
+    processed_paths = set()
     texts_to_process = []
-    with multiprocessing.Pool(processes=MAX_WORKERS, initializer=init_ocr_worker) as pool:
-        results = list(tqdm(
-            pool.imap_unordered(ocr_worker, all_doc_paths),
-            total=len(all_doc_paths),
-            desc="Phase 1: Parallel OCR"
-        ))
-        texts_to_process = [result for result in results if result]
+    if CHECKPOINT_FILE.is_file():
+        print(f"Found existing checkpoint file: {CHECKPOINT_FILE}")
+        with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    if "source_file" in data:
+                        texts_to_process.append(data)
+                        processed_paths.add(Path(data["source_file"]))
+                    else:
+                        tqdm.write(f"Warning: Skipping line with missing 'source_file' key: {line.strip()}")
+                except (json.JSONDecodeError, KeyError):
+                    tqdm.write(f"Warning: Skipping corrupted or invalid line in checkpoint file: {line.strip()}")
+        print(f"Loaded {len(processed_paths)} previously processed documents.")
+
+    remaining_paths = list(all_doc_paths - processed_paths)
+
+    if not remaining_paths:
+        print("All documents have already been processed. Moving to next phase.")
+    else:
+        print(f"Found {len(remaining_paths)} documents to process.")
+        print("Starting parallel OCR processing...")
+        try:
+            with multiprocessing.Pool(processes=MAX_WORKERS, initializer=init_ocr_worker) as pool:
+                with open(CHECKPOINT_FILE, "a", encoding="utf-8") as f_out:
+                    with tqdm(total=len(all_doc_paths), initial=len(processed_paths), desc="Phase 1: Parallel OCR") as pbar:
+                        for result in pool.imap_unordered(ocr_worker, remaining_paths):
+                            if result:
+                                texts_to_process.append(result)
+                                f_out.write(json.dumps(result) + "\n")
+                                f_out.flush()
+                            # Manually update the progress bar for each completed task.
+                            pbar.update(1)
+        except KeyboardInterrupt:
+            print("\n\nProcess interrupted by user. Shutting down gracefully.")
+            sys.exit(0)
 
     if not texts_to_process:
         print("Error: No text could be extracted from any documents. Exiting.")
