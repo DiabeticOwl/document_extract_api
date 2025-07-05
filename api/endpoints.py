@@ -2,6 +2,7 @@ import time
 
 from api.schemas import ExtractionResponse
 from core.ocr import extract_text_from_document, SUPPORTED_MIME_TYPES
+from core.llm import extract_entities_with_llm
 from core.vector_db import find_document_type
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
@@ -55,7 +56,6 @@ async def extract_entities(file: UploadFile = File(..., description="The documen
     confidence = classification_result['confidence']
 
     # 4. Extract structured entities using the LLM.
-    # This is the new step that calls our llm module.
     entities = extract_entities_with_llm(extracted_text, doc_type)
     if "error" in entities:
         raise HTTPException(status_code=500, detail=entities["error"])
