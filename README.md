@@ -50,6 +50,23 @@ data/sample_docs/
 
 A dataset used while building this project comes from [Shahebaz Mohammad's dataset in Kaggle](https://www.kaggle.com/datasets/shaz13/real-world-documents-collections).
 
+### Handling Low-Quality OCR with Data Augmentation
+A significant challenge in real-world document processing is handling low-quality inputs, such as skewed scans, poor lighting, or noisy artifacts. To make our system more robust against these issues, we have implemented an online data augmentation strategy during the vector database creation process.
+
+The Strategy: Random Preprocessing
+Instead of creating multiple static versions of each image, we apply one of several advanced preprocessing transformations randomly to each document before it is processed by the OCR engine. This means that on any given run of the build_vector_db.py script, the OCR engine is fed a slightly different, augmented version of the dataset.
+
+This approach makes the resulting text embeddings in our vector database more robust. The database learns to associate not just the "perfect" version of a document with its type, but also versions that have been cleaned and optimized in different ways. This improves the system's ability to classify real-world, imperfect documents.
+
+Implemented Transformations
+Noise Reduction (Median Blur): This filter is applied to remove "salt-and-pepper" noise common in scanned documents. It smooths out random speckles without significantly blurring the sharp edges of the text, leading to cleaner input for the OCR engine.
+
+Adaptive Thresholding: This technique converts the image to pure black and white by calculating an optimal brightness threshold for different regions of the image. It is highly effective at handling documents with shadows or uneven lighting, creating a high-contrast image that is ideal for OCR.
+
+Deskewing: The image is algorithmically rotated to ensure the lines of text are perfectly horizontal, which can dramatically improve OCR accuracy on tilted scans.
+
+None (Original Image): We also include the option to process the original, unaltered image. This ensures that the "perfect" version of the document is always represented in the database.
+
 ## 3. Build your Vector Database
 The build_vector_db.py script will process all your sample documents and create a searchable vector database from them.
 
