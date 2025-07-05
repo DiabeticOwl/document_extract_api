@@ -3,8 +3,8 @@ import time
 from api.schemas import ExtractionResponse
 from core.ocr import extract_text_from_document, SUPPORTED_MIME_TYPES
 from core.llm import extract_entities_with_llm
-from core.vector_db import find_document_type
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from core.vector_db import get_vector_db_client, VectorDBClient
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 
 # Create an APIRouter. This helps in organizing endpoints and can be included
 # in the main FastAPI app instance.
@@ -16,7 +16,12 @@ router = APIRouter()
     tags=["Document Processing"],
     summary="Extract entities from a document"
 )
-async def extract_entities(file: UploadFile = File(..., description="The document file (PDF or image) to be processed.")):
+async def extract_entities(
+    file: UploadFile = File(..., description="The document file (PDF or image) to be processed."),
+    # FastAPI will call get_vector_db_client()  the first time a request comes
+    # in, and then reuse that same object for all subsequent requests.
+    db_client: VectorDBClient = Depends(get_vector_db_client)
+):
     """
     This endpoint performs the full document processing pipeline:
     1.  Accepts a document upload.
@@ -45,7 +50,7 @@ async def extract_entities(file: UploadFile = File(..., description="The documen
         )
 
     # 3. Classify the document type using the vector database.
-    classification_result = find_document_type(extracted_text)
+    classification_result = db_client.find_document_type(extracted_text)
     if "error" in classification_result:
         raise HTTPException(
             status_code=500,
