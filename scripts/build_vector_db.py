@@ -1,10 +1,15 @@
 import chromadb
 import concurrent.futures
+import easyocr
 import multiprocessing
 import numpy as np
 import time
 
-from core.ocr import extract_text_from_document
+from core.ocr import (
+    extract_text_from_document,
+    SUPPORTED_PDF_FORMATS,
+    SUPPORTED_IMAGE_FORMATS
+)
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
@@ -14,24 +19,39 @@ DB_PATH = Path("data/chroma_db")
 # subfolders by type.
 SAMPLE_DOCS_PATH = Path("data")
 COLLECTION_NAME = "document_types"
-MODEL_NAME = 'all-MiniLM-L12-v2'
+MODEL_NAME = 'all-MiniLM-L6-v2'
+SUPPORTED_FORMATS = SUPPORTED_PDF_FORMATS + SUPPORTED_IMAGE_FORMATS
 
 # MAX_WORKERS limits the number of parallel processes for both OCR and encoding.
 # A lower number reduces memory (VRAM) and CPU load but is slower.
 # A higher number is faster but requires more resources.
 MAX_WORKERS = 2
 
+worker_ocr_reader = None
+
+
+def init_ocr_worker():
+    """
+    Initializer function for each worker process in the pool.
+    This runs ONCE per worker, loading the EasyOCR model into that process's memory.
+    """
+    global worker_ocr_reader
+    print(f"Initializing EasyOCR reader for worker process: {multiprocessing.current_process().pid}...")
+    worker_ocr_reader = easyocr.Reader(['en'])
+
 
 def ocr_worker(doc_path: Path):
     """
-    A worker function designed to run in a separate process.
-    It handles the entire OCR process for a single document.
+    A worker function for OCR. It reads its assigned file and uses the
+    pre-initialized model via the centralized `extract_text_from_document`
+    function.
     """
+    global worker_ocr_reader
     try:
         with open(doc_path, "rb") as f:
             file_bytes = f.read()
 
-        text = extract_text_from_document(file_bytes, doc_path.name)
+        text = extract_text_from_document(file_bytes, doc_path.name, reader=worker_ocr_reader)
 
         if text.strip():
             doc_type = doc_path.parent.name
@@ -67,36 +87,29 @@ def main():
         print(f"Error: The specified sample documents directory does not exist: {SAMPLE_DOCS_PATH}")
         return
 
-    texts_to_process = []
     all_doc_paths = [
-        doc_path
-        for type_path in SAMPLE_DOCS_PATH.iterdir()
-        if type_path.is_dir() and type_path.name != DB_PATH.name
-        for doc_path in type_path.iterdir()
+        p for p in SAMPLE_DOCS_PATH.rglob('*')
+        if p.is_file()
+           and p.parent.name != DB_PATH.name
+           and p.suffix.lower() in SUPPORTED_FORMATS
     ]
 
     if not all_doc_paths:
         print("Error: No documents found in the sample directory. Exiting.")
         return
 
+    all_doc_paths = all_doc_paths[:100]
+
     print(f"Found {len(all_doc_paths)} documents to process.")
 
-
     texts_to_process = []
-    # Use ProcessPoolExecutor to run the ocr_worker function on all files in parallel.
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # executor.map distributes the file paths to the worker processes.
-        # tqdm wraps this to create a progress bar for the parallel operation.
+    with multiprocessing.Pool(processes=MAX_WORKERS, initializer=init_ocr_worker) as pool:
         results = list(tqdm(
-            executor.map(ocr_worker, all_doc_paths),
+            pool.imap_unordered(ocr_worker, all_doc_paths),
             total=len(all_doc_paths),
             desc="Phase 1: Parallel OCR"
         ))
-
-        # Filter out any results that failed (returned None)
-        for result in results:
-            if result:
-                texts_to_process.append(result)
+        texts_to_process = [result for result in results if result]
 
     if not texts_to_process:
         print("Error: No text could be extracted from any documents. Exiting.")
@@ -104,21 +117,12 @@ def main():
 
     print(f"\nOCR Phase complete. Found text in {len(texts_to_process)} documents.")
 
-    # --- Phase 2: Parallel Encoding ---
-    # This is the most computationally intensive part of the script. We use the
-    # SentenceTransformers library's built-in tools to perform this step in parallel,
-    # dramatically reducing the total processing time.
-    print(f"\n--- Phase 2: Starting parallel embedding generation (max_workers={MAX_WORKERS}) ---")
-
-    pool = None
+    print("\n--- Phase 2: Starting batched embedding generation ---")
     try:
         print("Initializing SentenceTransformer model...")
         embedding_model = SentenceTransformer(MODEL_NAME)
 
         sentences = [item["text"] for item in texts_to_process]
-
-        print("Starting a pool of CPU worker processes for encoding...")
-        pool = embedding_model.start_multi_process_pool()
 
         # `encode` takes the list of sentences and distributes them among the worker
         # processes in the pool. It automatically handles batching and scheduling
@@ -127,10 +131,9 @@ def main():
         # An embedding (or vector) is a list of numbers that represents
         # the semantic meaning of the text. The embedding_model converts
         # the extracted text string into this numerical format.
-        print(f"Encoding {len(sentences)} documents across {MAX_WORKERS} processes...")
+        print("Encoding {len(sentences)} documents in a single batch...")
         embeddings = embedding_model.encode(
             sentences,
-            pool=pool,
             batch_size=32,
             show_progress_bar=True
         )
@@ -140,10 +143,6 @@ def main():
     except Exception as e:
         print(f"FATAL ERROR during embedding phase: {e}")
         return
-    finally:
-        if pool:
-            print("Stopping the process pool...")
-            embedding_model.stop_multi_process_pool(pool)
 
     # --- Phase 3: Database Insertion ---
     # In the final phase, we connect to the database and add all the processed
