@@ -95,6 +95,7 @@ def main():
         print(f"Error: The specified sample documents directory does not exist: {SAMPLE_DOCS_PATH}")
         return
 
+    # Using a set `{...}` is an efficient way to gather unique paths.
     all_doc_paths = {
         p for p in SAMPLE_DOCS_PATH.rglob('*')
         if p.is_file()
@@ -106,12 +107,13 @@ def main():
         print("Error: No documents found in the sample directory. Exiting.")
         return
 
-
     processed_paths = set()
     texts_to_process = []
     if CHECKPOINT_FILE.is_file():
         print(f"Found existing checkpoint file: {CHECKPOINT_FILE}")
         with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            # Load already completed work.
+            # Iterate through each line of the JSONL file.
             for line in f:
                 try:
                     data = json.loads(line)
@@ -121,6 +123,8 @@ def main():
                     else:
                         tqdm.write(f"Warning: Skipping line with missing 'source_file' key: {line.strip()}")
                 except (json.JSONDecodeError, KeyError):
+                    # If a line is corrupted (e.g., from an abrupt shutdown),
+                    # we skip it. The corresponding file will be re-processed.
                     tqdm.write(f"Warning: Skipping corrupted or invalid line in checkpoint file: {line.strip()}")
         print(f"Loaded {len(processed_paths)} previously processed documents.")
 
@@ -132,13 +136,20 @@ def main():
         print(f"Found {len(remaining_paths)} documents to process.")
         print("Starting parallel OCR processing...")
         try:
+            # Use a multiprocessing Pool with our initializer for stable,
+            # parallel execution.
             with multiprocessing.Pool(processes=MAX_WORKERS, initializer=init_ocr_worker) as pool:
+                # Open the checkpoint file in append mode ('a') to add new results.
                 with open(CHECKPOINT_FILE, "a", encoding="utf-8") as f_out:
+                    # The progress bar is configured to show the overall progress,
+                    # starting from the number of already completed items.
                     with tqdm(total=len(all_doc_paths), initial=len(processed_paths), desc="Phase 1: Parallel OCR") as pbar:
+                        # pool.imap_unordered is highly efficient for distributing tasks.
                         for result in pool.imap_unordered(ocr_worker, remaining_paths):
                             if result:
                                 texts_to_process.append(result)
                                 f_out.write(json.dumps(result) + "\n")
+                                # Flush the buffer to ensure the line is written to disk immediately.
                                 f_out.flush()
                             # Manually update the progress bar for each completed task.
                             pbar.update(1)
