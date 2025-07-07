@@ -41,7 +41,7 @@ The **Intelligent Document Understanding API** is designed to extract structured
 | **Vector Database** 	| ChromaDB 	| To store and perform efficient similarity searches on embeddings. 	|
 | **LLM Service** 	| Ollama & Phi-3 Mini 	| To serve a local LLM for fast and accurate entity extraction. 	|
 | **Parallel Processing** 	| `multiprocessing` 	| To significantly speed up the initial data processing pipeline. 	|
-| **Image Augmentation** 	| OpenCV & Pillow 	| To apply random preprocessing for a more robust dataset. 	|
+| **Image Augmentation** 	| OpenCV & Pillow 	| To apply preprocessing transformations for a more robust dataset. 	|
 
 ## Project Structure
 ```
@@ -149,6 +149,10 @@ The endpoint: `POST /extract_entities/` accepts a multipart/form-data request wi
     }
     ```
 
+- When running through your web browser you can consume the LLM in a similar but more user friendly way:
+![API Response through Frontend](<API Response through Frontend.png>)
+
+
 ## Testing Procedures
 The project includes a comprehensive test suite using `pytest` to ensure code quality, reliability, and maintainability. Our testing strategy is divided into two main categories: unit tests for individual components and integration tests for the complete API workflow. This suite makes extensive use of mocking via the `pytest-mock` library to isolate components from external dependencies.
 
@@ -185,7 +189,7 @@ docker build -t document-api .
 4. **Stop the Container**: Press `CTRL+C` in the terminal where the container is running. This will gracefully stop the Uvicorn server and, because of the `--rm` flag, the container will be automatically removed.
 
 ## Data Augmentation for OCR
-To handle low-quality real-world documents, the `build_vector_db.py` script employs an online data augmentation strategy. This is a critical step for building a system that is resilient to the imperfections of scanned or photographed documents. During the build process, one of several advanced preprocessing transformations is randomly applied to each document before it is passed to the OCR engine.
+To handle low-quality real-world documents, the `build_vector_db.py` script employs an online data augmentation strategy. This is a critical step for building a system that is resilient to the imperfections of scanned or photographed documents. During the build process, multiple advanced preprocessing transformations is applied to each document before it is passed to the OCR engine.
 
 This approach is more efficient than offline augmentation (pre-generating thousands of transformed images), as it saves significant disk space and time. More importantly, it makes the resulting vector database more robust. The system learns to associate a document's core semantic meaning with a variety of visual representations, not just a single "perfect" version. This greatly improves its ability to classify real-world documents affected by skewed scans, digital noise, and uneven lighting.
 

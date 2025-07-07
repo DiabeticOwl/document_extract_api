@@ -14,15 +14,15 @@ class VectorDBClient:
     prevents the models from being loaded on simple module imports and provides
     a clean, reusable interface for the API.
     """
-    def __init__(self, db_path: str = "data/chroma_db", collection_name: str = "document_types"):
+    def __init__(self):
         """
         Initializes the VectorDBClient.
 
         This method loads the embedding model and connects to the ChromaDB
         collection. It's designed to be called once when the API starts.
         """
-        self.db_path = Path(db_path)
-        self.collection_name = collection_name
+        self.db_path = Path(__file__).parent.parent / "data/chroma_db"
+        self.collection_name = "document_types"
         self.model_name = 'all-MiniLM-L6-v2'
 
         # These will be populated by the _load() method.

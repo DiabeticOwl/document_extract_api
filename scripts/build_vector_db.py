@@ -22,6 +22,9 @@ MODEL_NAME = 'all-MiniLM-L6-v2'
 # A higher number is faster but requires more resources.
 MAX_WORKERS = 4
 
+# Define a safe batch size for ChromaDB insertion, well below the observed limit.
+DB_BATCH_SIZE = 4096
+
 # Define the set of preprocessing options to be applied randomly.
 # 'None' is included to ensure the original, unaltered image is also processed.
 PREPROCESSING_OPTIONS = [None, 'deskew', 'noise', 'threshold']
@@ -49,23 +52,26 @@ def ocr_worker(doc_path: Path):
             file_bytes = f.read()
 
         # Randomly select a preprocessing option.
-        selected_preprocessing = random.choice(PREPROCESSING_OPTIONS)
+        # selected_preprocessing = random.choice(PREPROCESSING_OPTIONS)
+        results_per_file = []
 
-        text = extract_text_from_document(
-            file_bytes,
-            doc_path.name,
-            reader=worker_ocr_reader,
-            preprocessing=selected_preprocessing
-        )
+        for transformation in PREPROCESSING_OPTIONS:
+            text = extract_text_from_document(
+                file_bytes,
+                doc_path.name,
+                reader=worker_ocr_reader,
+                preprocessing=transformation
+            )
 
-        if text.strip():
-            doc_type = doc_path.parent.name
-            return {
-                "text": text,
-                "metadata": {"document_type": doc_type},
-                "source_file": str(doc_path)
-            }
-        return None
+            if text.strip():
+                doc_type = doc_path.parent.name
+                results_per_file.append({
+                    "text": text,
+                    "metadata": {"document_type": doc_type, "augmentation": str(transformation)},
+                    "source_file": str(doc_path)
+                })
+
+        return results_per_file
     except Exception as e:
         tqdm.write(f"  - ERROR processing {doc_path.name}: {e}")
         return None
@@ -132,10 +138,17 @@ def main():
 
     if not remaining_paths:
         print("All documents have already been processed. Moving to next phase.")
+        with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            texts_to_process = [json.loads(line) for line in f if line.strip()]
     else:
-        print(f"Found {len(remaining_paths)} documents to process.")
-        print("Starting parallel OCR processing...")
+        print(f"Found {len(remaining_paths)} new or unprocessed documents.")
         try:
+            # Re-load the already processed data to append new results.
+            if CHECKPOINT_FILE.is_file():
+                 with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+                    texts_to_process = [json.loads(line) for line in f if line.strip()]
+
+            print("Starting parallel OCR processing...")
             # Use a multiprocessing Pool with our initializer for stable,
             # parallel execution.
             with multiprocessing.Pool(processes=MAX_WORKERS, initializer=init_ocr_worker) as pool:
@@ -145,10 +158,11 @@ def main():
                     # starting from the number of already completed items.
                     with tqdm(total=len(all_doc_paths), initial=len(processed_paths), desc="Phase 1: Parallel OCR") as pbar:
                         # pool.imap_unordered is highly efficient for distributing tasks.
-                        for result in pool.imap_unordered(ocr_worker, remaining_paths):
-                            if result:
-                                texts_to_process.append(result)
-                                f_out.write(json.dumps(result) + "\n")
+                        for result_list in pool.imap_unordered(ocr_worker, remaining_paths):
+                            if result_list:
+                                texts_to_process.extend(result_list)
+                                for result in result_list:
+                                    f_out.write(json.dumps(result) + "\n")
                                 # Flush the buffer to ensure the line is written to disk immediately.
                                 f_out.flush()
                             # Manually update the progress bar for each completed task.
@@ -201,15 +215,24 @@ def main():
             metadata={"hnsw:space": "cosine"}
         )
 
-        # Adding data in one large batch is significantly faster than adding each
-        # document individually, as it minimizes database transaction overhead.
-        print(f"Adding {len(texts_to_process)} embeddings to the ChromaDB collection...")
-        collection.add(
-            # Convert the numpy array to a standard list
-            embeddings=embeddings.tolist(),
-            metadatas=[item["metadata"] for item in texts_to_process],
-            ids=[f"id_{i}" for i in range(len(texts_to_process))]
-        )
+        total_items = len(texts_to_process)
+        print(f"Preparing to add {total_items} embeddings to the ChromaDB collection in chunks of {DB_BATCH_SIZE}...")
+
+        # Loop through the data in chunks to avoid exceeding the max batch size.
+        for i in tqdm(range(0, total_items, DB_BATCH_SIZE), desc="Phase 3: DB Insertion"):
+            # Create a slice for the current batch
+            end_i = min(i + DB_BATCH_SIZE, total_items)
+
+            batch_embeddings = embeddings[i:end_i]
+            batch_metadatas = [item["metadata"] for item in texts_to_process[i:end_i]]
+            # Generate unique IDs for the current batch
+            batch_ids = [f"id_{j}" for j in range(i, end_i)]
+
+            collection.add(
+                embeddings=batch_embeddings.tolist(),
+                metadatas=batch_metadatas,
+                ids=batch_ids
+            )
     except Exception as e:
         print(f"FATAL ERROR during database insertion: {e}")
         return
