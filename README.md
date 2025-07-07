@@ -150,7 +150,8 @@ The endpoint: `POST /extract_entities/` accepts a multipart/form-data request wi
     ```
 
 - When running through your web browser you can consume the LLM in a similar but more user friendly way:
-![API Response through Frontend](<API Response through Frontend.png>)
+
+    ![API Response through Frontend](<API Response through Frontend.png>)
 
 
 ## Testing Procedures
